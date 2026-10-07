@@ -107,6 +107,63 @@ jobs:
           cp icon-only.png icon-foreground.png assets/
           npx capacitor-assets generate --android --iconBackgroundColor '#010219' --iconBackgroundColorDark '#010219'
 
+      - name: Asegurar fondo del ícono
+        run: |
+          cat > fixicon.mjs <<'EOF'
+          import fs from "fs";
+          import zlib from "zlib";
+
+          // PNG de un solo color, sin librerías externas
+          function solidPng(size, [r, g, b]) {
+            const stride = size * 3 + 1;
+            const raw = Buffer.alloc(size * stride);
+            for (let y = 0; y < size; y++) {
+              const o = y * stride;
+              raw[o] = 0;
+              for (let x = 0; x < size; x++) {
+                raw[o + 1 + x * 3] = r;
+                raw[o + 2 + x * 3] = g;
+                raw[o + 3 + x * 3] = b;
+              }
+            }
+            const chunk = (type, data) => {
+              const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+              const td = Buffer.concat([Buffer.from(type), data]);
+              const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td) >>> 0);
+              return Buffer.concat([len, td, crc]);
+            };
+            const ihdr = Buffer.alloc(13);
+            ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+            ihdr[8] = 8; ihdr[9] = 2;
+            return Buffer.concat([
+              Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+              chunk("IHDR", ihdr),
+              chunk("IDAT", zlib.deflateSync(raw)),
+              chunk("IEND", Buffer.alloc(0)),
+            ]);
+          }
+
+          const res = "android/app/src/main/res";
+          const sizes = { mdpi: 108, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 };
+          let created = 0;
+          for (const [d, s] of Object.entries(sizes)) {
+            const dir = `${res}/mipmap-${d}`;
+            fs.mkdirSync(dir, { recursive: true });
+            const has = fs.readdirSync(dir).some((f) => f.startsWith("ic_launcher_background."));
+            if (!has) {
+              fs.writeFileSync(`${dir}/ic_launcher_background.png`, solidPng(s, [1, 2, 25]));
+              created++;
+            }
+          }
+          console.log("Fondos de ícono creados: " + created);
+
+          // Mostrar qué recursos de ícono quedaron, para diagnóstico
+          for (const f of fs.readdirSync(res).filter((n) => n.startsWith("mipmap-")).sort()) {
+            console.log(f + ": " + fs.readdirSync(`${res}/${f}`).join(", "));
+          }
+          EOF
+          node fixicon.mjs
+
       - name: Poner versión
         run: |
           sed -i -E "s/versionCode[[:space:]]*=?[[:space:]]*[0-9]+/versionCode ${{ github.run_number }}/; s/versionName[[:space:]]*=?[[:space:]]*\"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
