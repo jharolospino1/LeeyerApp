@@ -1,0 +1,140 @@
+name: Compilar LeeyerApp (APK)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión de la app (ejemplo: 1.0.0)"
+        required: true
+        default: "1.0.0"
+
+permissions:
+  contents: write
+
+env:
+  APP_ID: com.leeyerapp.app
+  APP_NAME: LeeyerApp
+  VERSION: ${{ inputs.version }}
+  KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+  KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Verificar archivos y claves
+        run: |
+          for f in index.html icon-only.png icon-foreground.png; do
+            test -f "$f" || { echo "::error::Falta el archivo $f en el repositorio"; exit 1; }
+          done
+          test -n "$KEYSTORE_B64" || { echo "::error::Falta el secreto KEYSTORE_BASE64 (Settings > Secrets and variables > Actions)"; exit 1; }
+          test -n "$KS_PASS" || { echo "::error::Falta el secreto KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)"; exit 1; }
+          echo "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$' || { echo "::error::La versión debe verse así: 1.0.0"; exit 1; }
+
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar Capacitor y dependencias
+        run: |
+          npm init -y > /dev/null
+          npm install @capacitor/core@7 @capacitor/android@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
+          npm install --save-dev @capacitor/cli@7 @capacitor/assets
+
+      - name: Preparar la app (incluir librerías y fuentes dentro del APK)
+        run: |
+          cat > prepare.mjs <<'EOF'
+          import fs from "fs";
+          fs.rmSync("www", { recursive: true, force: true });
+          fs.mkdirSync("www/fonts", { recursive: true });
+
+          let html = fs.readFileSync("index.html", "utf8");
+
+          // 1) Supabase local en lugar de la CDN
+          fs.copyFileSync("node_modules/@supabase/supabase-js/dist/umd/supabase.js", "www/supabase.js");
+          html = html.replace(/<script[^>]*src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase[^"]*"[^>]*><\/script>/, () => '<script src="supabase.js"></script>');
+
+          // 2) Fuente local en lugar de Google Fonts
+          let css = "";
+          for (const w of [400, 600, 800]) {
+            const name = `plus-jakarta-sans-latin-${w}-normal.woff2`;
+            fs.copyFileSync(`node_modules/@fontsource/plus-jakarta-sans/files/${name}`, `www/fonts/${name}`);
+            css += `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:${w};font-display:swap;src:url(fonts/${name}) format("woff2")}`;
+          }
+          html = html.replace(/<link[^>]*fonts\.googleapis\.com[^>]*>/, () => `<style>${css}</style>`);
+
+          // 3) Videos incrustados: enviar referrer (ayuda con YouTube/Vimeo dentro de la app)
+          html = html.split('allowfullscreen></iframe>').join('allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>');
+
+          if (/cdn\.jsdelivr\.net|fonts\.googleapis\.com/.test(html)) {
+            console.error("ERROR: quedaron enlaces externos de CDN/Fuentes en el HTML");
+            process.exit(1);
+          }
+          fs.writeFileSync("www/index.html", html);
+          console.log("OK: www/index.html listo (" + html.length + " bytes)");
+          EOF
+          node prepare.mjs
+
+      - name: Crear el proyecto Android
+        run: |
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "$APP_ID",
+            "appName": "$APP_NAME",
+            "webDir": "www",
+            "backgroundColor": "#060813",
+            "server": { "androidScheme": "https" },
+            "android": { "adjustMarginsForEdgeToEdge": "force" }
+          }
+          EOF
+          npx cap add android
+          npx cap sync android
+
+      - name: Generar íconos
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          cp icon-only.png icon-foreground.png assets/
+          npx capacitor-assets generate --android --iconBackgroundColor '#010219' --iconBackgroundColorDark '#010219'
+
+      - name: Poner versión
+        run: |
+          sed -i -E "s/versionCode[[:space:]]*=?[[:space:]]*[0-9]+/versionCode ${{ github.run_number }}/; s/versionName[[:space:]]*=?[[:space:]]*\"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
+          grep -nE "versionCode|versionName" android/app/build.gradle
+
+      - name: Compilar APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Alinear y firmar el APK
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          UNSIGNED=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK sin firmar: $UNSIGNED"
+          echo "$KEYSTORE_B64" | base64 -d > release.jks
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks release.jks --ks-key-alias leeyerapp --ks-pass env:KS_PASS --key-pass env:KS_PASS --out LeeyerApp.apk aligned.apk
+          "$BT/apksigner" verify --print-certs LeeyerApp.apk
+          ls -la LeeyerApp.apk
+          rm -f release.jks
+
+      - name: Publicar en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION}-b${{ github.run_number }}"
+          gh release create "$TAG" LeeyerApp.apk \
+            --title "LeeyerApp $VERSION" \
+            --notes "APK de LeeyerApp versión $VERSION para Android." \
+            --latest
+          echo "Enlace fijo de descarga: https://github.com/${{ github.repository }}/releases/latest/download/LeeyerApp.apk"
