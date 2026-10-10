@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#060813"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>LeeyerApp</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
@@ -1978,10 +1978,17 @@ var IA=(function(){
    f.map(function(c){return'<div class="iahi"><button class="main" onclick="IA.openChat(\''+c.id+'\')"><span class="iaav">'+ic("ai",22)+'</span><span class="tx"><b>'+E(c.title)+'</b><small>'+E(c.preview||"")+'</small></span><span class="dt">'+ago(c.updated_at)+'</span></button><button class="ib'+(c.favorite?" on":"")+'" aria-label="'+(c.favorite?"Quitar de favoritos":"Marcar como favorita")+'" aria-pressed="'+!!c.favorite+'" onclick="IA.favId(\''+c.id+'\')">'+ic("star",20)+'</button><button class="ib" aria-label="Eliminar conversación" onclick="IA.delId(\''+c.id+'\')">'+ic("trash",19)+'</button></div>'}).join(""))+'</div>';o.innerHTML=h;return}
   if(v=="ex"){o.innerHTML=hdr("Ejemplos de preguntas")+'<div class="iab2">'+EX.map(function(q,i){return'<button class="iaex" onclick="IA.ask('+i+')">'+ic("chat",20)+'<span class="t">'+E(q)+'</span>'+ic("chev",18)+'</button>'}).join("")+'<button class="iasf" onclick="IA.start()"><span style="color:var(--accs)">'+ic("scale",34)+'</span><span><b>¿No encuentras lo que buscas?</b><small>Escribe tu propia pregunta y te responderé de forma clara y precisa.</small></span></button></div>'}}
  function paintList(){var l=document.getElementById("iaL");if(!l)return;l.innerHTML=listH();l.scrollTop=l.scrollHeight;var b=document.getElementById("iaS");if(b)b.disabled=!!S.busy}
+ var baseH=0;
+ function fit(sc){if(!o||o.hidden)return;var vv=window.visualViewport,h=vv?vv.height:window.innerHeight;o.style.height=h+"px";o.style.top=(vv?vv.offsetTop:0)+"px";if(sc){var l=document.getElementById("iaL");if(l)l.scrollTop=l.scrollHeight}}
+ /* Respaldo: si el navegador/WebView no avisa del teclado, se reserva espacio abajo mientras se escribe */
+ function kbFallback(){if(!o||o.hidden||!baseH)return;var ta=document.activeElement;if(!ta||ta.tagName!="TEXTAREA")return;var vv=window.visualViewport,h=vv?vv.height:window.innerHeight;if(h>=baseH-80){o.style.paddingBottom=Math.round(baseH*.4)+"px";var l=document.getElementById("iaL");if(l)l.scrollTop=l.scrollHeight}}
  function open(){var s=sb();if(!s||!window.ACC||!ACC.id){toast("Inicia sesión para usar LeeyerIA");return}
   if(!o){o=document.createElement("div");o.id="iao";o.setAttribute("role","dialog");o.setAttribute("aria-label","LeeyerIA");document.body.appendChild(o);
-   if(window.visualViewport){var vv=window.visualViewport;vv.addEventListener("resize",function(){if(!o.hidden){o.style.height=vv.height+"px";var l=document.getElementById("iaL");if(l)l.scrollTop=l.scrollHeight}});vv.addEventListener("scroll",function(){if(!o.hidden)o.style.top=vv.offsetTop+"px"})}}
-  o.hidden=false;o.style.height=window.visualViewport?window.visualViewport.height+"px":"100%";hs=[];S.v="welcome";S.on=null;S.err="";render();status()}
+   if(window.visualViewport){var vv=window.visualViewport;vv.addEventListener("resize",function(){fit(1)});vv.addEventListener("scroll",function(){fit(0)})}
+   window.addEventListener("resize",function(){fit(1)});
+   o.addEventListener("focusin",function(e){if(e.target&&e.target.tagName=="TEXTAREA"){[80,250,500].forEach(function(t){setTimeout(function(){fit(1)},t)});setTimeout(kbFallback,550)}});
+   o.addEventListener("focusout",function(e){if(e.target&&e.target.tagName=="TEXTAREA"){o.style.paddingBottom="";setTimeout(function(){fit(0)},120)}})}
+  o.hidden=false;baseH=window.innerHeight;fit(0);hs=[];S.v="welcome";S.on=null;S.err="";render();status()}
  function close(){if(o)o.hidden=true;hs=[]}
  function go(v){hs.push(S.v);S.v=v;if(v=="hist"){S.tab="all";loadList();return}render()}
  function back(){if(S.v=="welcome"){close();return}S.v=hs.pop()||"welcome";if(S.v=="hist"){loadList();return}render()}
@@ -2041,4 +2048,166 @@ var IA=(function(){
   render()}
  return{open:open,close:close,go:go,back:back,start:start,fresh:fresh,ask:ask,openChat:openChat,send:send,retry:retry,copy:copy,menu:menu,tab:tab,favId:favId,delId:delId,grow:grow,key:key,loadList:loadList}
 })();
-</script></body></html>
+</script><script id="leeyer-update">
+/* ===== LeeyerApp · Sistema de avisos de actualización =====
+   - VERSIÓN INSTALADA: CFG.version (súbela en cada compilación/APK nuevo).
+   - VERSIÓN PUBLICADA: archivo version.json en la página de descarga (CFG.manifestUrl).
+   - Si la publicada es mayor que la instalada, se muestra el aviso. Sin internet no pasa nada.
+   Guía completa: PUBLICAR_ACTUALIZACION.md */
+(function(){"use strict";
+var CFG={
+  version:"1.0.0",
+  manifestUrl:"https://jharolospino1.github.io/leeyerapp-web/version.json",
+  downloadUrl:"https://jharolospino1.github.io/leeyerapp-web/",
+  timeoutMs:7000,startDelayMs:1200,recheckMs:900000
+};
+var KEY="leeyer-upd-dismissed",ov=null,prevFocus=null,inerted=[],busy=0,failed=0,lastCheck=0;
+
+function parse(v){var m=/^v?(\d+(?:\.\d+){0,3})/i.exec(String(v==null?"":v).trim());return m?m[1].split(".").map(Number):null}
+function cmp(a,b){a=parse(a);b=parse(b);if(!a||!b)return 0;for(var i=0;i<4;i++){var x=a[i]||0,y=b[i]||0;if(x!==y)return x>y?1:-1}return 0}
+function txt(v,n){return typeof v==="string"?v.trim().slice(0,n):""}
+function httpsUrl(u,fb){try{var x=new URL(u);return x.protocol==="https:"?x.href:fb}catch(e){return fb}}
+
+/* Valida y limpia lo que llega del JSON remoto (nunca se inserta como HTML) */
+function clean(j){
+  if(!j||typeof j!=="object"||!parse(j.version))return null;
+  var notes=Array.isArray(j.notes)?j.notes.map(function(n){return txt(n,140)}).filter(Boolean).slice(0,6):[];
+  var min=parse(j.minVersion)?String(j.minVersion):"";
+  return{
+    version:String(j.version).trim().replace(/^v/i,""),
+    mandatory:j.mandatory===true||!!(min&&cmp(CFG.version,min)<0),
+    url:httpsUrl(j.downloadUrl,CFG.downloadUrl),
+    title:txt(j.title,80),message:txt(j.message,300),notesTitle:txt(j.notesTitle,80),notes:notes
+  };
+}
+function load(){
+  var ctl=window.AbortController?new AbortController():null,
+      t=setTimeout(function(){if(ctl)ctl.abort()},CFG.timeoutMs),
+      u=CFG.manifestUrl+(CFG.manifestUrl.indexOf("?")<0?"?":"&")+"t="+Date.now();
+  return fetch(u,{cache:"no-store",credentials:"omit",signal:ctl?ctl.signal:undefined})
+    .then(function(r){clearTimeout(t);if(!r.ok)throw 0;return r.json()})
+    .then(clean).catch(function(){clearTimeout(t);return null});
+}
+
+/* ---------- Diseño ---------- */
+function svg(p){return'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+p+'</svg>'}
+var I={
+  x:svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  rocket:svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>'),
+  link:svg('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
+  arrow:svg('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'),
+  globe:svg('<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>')
+};
+var LOGO='<svg viewBox="0 0 48 48" fill="none" stroke="#7C5CFF" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true"><path d="M5 12l13-4 6 3 6-3 13 4v22L24 44 5 34z"/><path d="M24 11v33M17 19h14M24 19v13M17 32h14"/></svg>';
+var CSS='.lu-ov{position:fixed;inset:0;z-index:2147483000;display:flex;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:calc(env(safe-area-inset-top,0px) + 58px) 16px calc(env(safe-area-inset-bottom,0px) + 20px);background:rgba(2,4,12,.74);-webkit-backdrop-filter:blur(7px);backdrop-filter:blur(7px);opacity:0;transition:opacity .26s ease;font-family:inherit;-webkit-text-size-adjust:100%}'
++'.lu-ov.on{opacity:1}'
++'.lu-card{position:relative;margin:auto;width:100%;max-width:440px;box-sizing:border-box;padding:62px 22px 20px;border-radius:28px;text-align:center;color:#F4F6FC;background:radial-gradient(280px 130px at 50% 0,rgba(124,92,255,.24),transparent 72%),linear-gradient(180deg,#0E1535 0%,#0A1029 55%,#080D22 100%);border:1px solid rgba(124,92,255,.4);box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 60px rgba(91,61,224,.3);opacity:0;transform:translateY(20px) scale(.96);transition:transform .34s cubic-bezier(.2,.9,.3,1.08),opacity .26s ease}'
++'.lu-ov.on .lu-card{opacity:1;transform:none}'
++'.lu-card *{box-sizing:border-box}.lu-card:focus{outline:none}'
++'.lu-x{position:absolute;top:12px;right:12px;width:44px;height:44px;border:0;border-radius:50%;background:transparent;color:#DDE2F5;display:grid;place-items:center;cursor:pointer;-webkit-tap-highlight-color:transparent}'
++'.lu-x svg{width:24px;height:24px}.lu-x:active{background:rgba(255,255,255,.09)}'
++'.lu-logo{position:absolute;left:50%;top:-36px;width:84px;height:84px;margin-left:-42px;border-radius:24px;display:grid;place-items:center;background:linear-gradient(160deg,#10183A,#0A0F26);border:1.5px solid rgba(124,92,255,.78);box-shadow:0 0 30px rgba(109,74,245,.5),inset 0 0 18px rgba(109,74,245,.2)}'
++'.lu-logo>svg{width:46px;height:46px}'
++'.lu-v{position:absolute;right:-14px;bottom:-9px;padding:3px 9px;border-radius:999px;background:#6D4AF5;border:2px solid #0A1029;color:#fff;font-size:12px;font-weight:700;line-height:1.25;white-space:nowrap}'
++'.lu-title{margin:0 0 12px;font-size:clamp(23px,6.4vw,29px);line-height:1.18;font-weight:800;letter-spacing:-.4px;color:#F4F6FC}'
++'.lu-h{display:block;color:#8466FF}'
++'.lu-msg{margin:0 0 16px;color:#C5CDE6;font-size:15px;line-height:1.5}'
++'.lu-box{display:flex;gap:14px;align-items:flex-start;text-align:left;margin:0 0 18px;padding:14px;border-radius:18px;background:rgba(255,255,255,.035);border:1px solid rgba(124,92,255,.22)}'
++'.lu-rk{flex:none;width:52px;height:52px;border-radius:14px;display:grid;place-items:center;background:rgba(109,74,245,.22);color:#9B83FF}.lu-rk svg{width:28px;height:28px}'
++'.lu-bt{display:block;font-size:15px;font-weight:700;line-height:1.3;color:#F4F6FC}'
++'.lu-ul{margin:6px 0 0;padding-left:18px;color:#C5CDE6;font-size:14px;line-height:1.55}'
++'.lu-req{margin:0 0 14px;padding:10px 12px;border-radius:14px;background:rgba(255,122,133,.1);border:1px solid rgba(255,122,133,.38);color:#FFB9BF;font-size:13.5px;line-height:1.4;font-weight:600}'
++'.lu-btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;min-height:54px;padding:6px 16px;border-radius:999px;color:#fff;text-decoration:none;text-align:center;line-height:1.2;font-size:clamp(14px,3.9vw,16px);font-weight:700;background:linear-gradient(180deg,#6B48F6,#5236E6);box-shadow:0 8px 24px rgba(91,61,224,.5),inset 0 1px 0 rgba(255,255,255,.22);-webkit-tap-highlight-color:transparent;transition:transform .12s ease}'
++'.lu-btn svg{width:20px;height:20px;flex:none}.lu-btn:active{transform:scale(.985)}'
++'.lu-btn:focus-visible,.lu-x:focus-visible{outline:2px solid #B9A8FF;outline-offset:3px}'
++'.lu-host{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:14px;color:#98A2C4;font-size:13.5px;word-break:break-all}.lu-host svg{width:16px;height:16px;flex:none}'
++'@media(prefers-reduced-motion:reduce){.lu-ov,.lu-card,.lu-btn{transition:none}}'
++'@media(max-width:340px){.lu-card{padding:62px 16px 18px}.lu-box{padding:12px;gap:10px}.lu-rk{width:44px;height:44px}}';
+
+function css(){if(document.getElementById("lu-css"))return;var s=document.createElement("style");s.id="lu-css";s.textContent=CSS;document.head.appendChild(s)}
+function q(s){return ov.querySelector(s)}
+
+function label(v){var p=v.split(".");while(p.length>2&&p[p.length-1]==="0")p.pop();return p.join(".")}
+function show(info){
+  if(ov&&ov.dataset.v===info.version&&ov.dataset.m===(info.mandatory?"1":"0"))return;
+  if(ov)drop(1);
+  css();prevFocus=document.activeElement;
+  var m=info.mandatory,
+      title=info.title||(m?"¡Actualización obligatoria!":"¡Nueva actualización disponible!"),
+      i=title.lastIndexOf(" "),
+      u=new URL(info.url);
+  ov=document.createElement("div");ov.className="lu-ov";ov.dataset.v=info.version;ov.dataset.m=m?"1":"0";
+  ov.innerHTML='<div class="lu-card" role="dialog" aria-modal="true" aria-labelledby="lu-t" aria-describedby="lu-d">'
+    +(m?'':'<button type="button" class="lu-x" aria-label="Cerrar">'+I.x+'</button>')
+    +'<div class="lu-logo">'+LOGO+'<span class="lu-v"></span></div>'
+    +'<h2 id="lu-t" class="lu-title"><span class="lu-a"></span><span class="lu-h"></span></h2>'
+    +'<p id="lu-d" class="lu-msg"></p>'
+    +(info.notes.length?'<div class="lu-box"><span class="lu-rk">'+I.rocket+'</span><div><b class="lu-bt"></b><ul class="lu-ul"></ul></div></div>':'')
+    +(m?'<p class="lu-req" role="alert">Esta actualización es obligatoria. Debes instalarla para seguir usando LeeyerApp.</p>':'')
+    +'<a class="lu-btn" target="_blank" rel="noopener noreferrer">'+I.link+'<span>Ir a la página de descarga</span>'+I.arrow+'</a>'
+    +'<div class="lu-host">'+I.globe+'<span class="lu-ht"></span></div></div>';
+  q(".lu-v").textContent="v"+label(info.version);
+  q(".lu-a").textContent=i>0?title.slice(0,i):"";
+  q(".lu-h").textContent=i>0?title.slice(i+1):title;
+  q(".lu-msg").textContent=info.message||"Hemos mejorado la app con nuevas funciones, corrección de errores y un mejor rendimiento para ti.";
+  if(info.notes.length){
+    q(".lu-bt").textContent=info.notesTitle||"¿Qué incluye esta actualización?";
+    var ul=q(".lu-ul");info.notes.forEach(function(n){var li=document.createElement("li");li.textContent=n;ul.appendChild(li)});
+  }
+  var a=q(".lu-btn");a.href=info.url;
+  q(".lu-ht").textContent=u.host+u.pathname.replace(/\/$/,"");
+  ov.addEventListener("click",function(e){
+    if(e.target.closest(".lu-x")){close();return}
+    if(e.target.closest(".lu-btn")){e.preventDefault();go(info.url);return}
+    if(e.target===ov&&!m)close();
+  });
+  document.body.appendChild(ov);
+  [].forEach.call(document.body.children,function(el){if(el!==ov&&el.tagName!=="SCRIPT"&&!el.inert){el.inert=true;inerted.push(el)}});
+  document.addEventListener("keydown",onKey,true);
+  void ov.offsetWidth;ov.classList.add("on");
+  try{var cd=q(".lu-card");cd.tabIndex=-1;cd.focus({preventScroll:true})}catch(e){}
+}
+/* Abre la página de descarga; si el navegador/WebView bloquea la pestaña nueva, navega en la misma */
+function go(url){try{var w=window.open(url,"_blank");if(w){try{w.opener=null}catch(e){}}else location.href=url}catch(e){location.href=url}}
+function onKey(e){
+  if(!ov)return;
+  if(e.key==="Escape"){e.preventDefault();if(ov.dataset.m!=="1")close();return}
+  if(e.key==="Tab"){
+    var f=[].slice.call(ov.querySelectorAll("button,a[href]"));if(!f.length)return;
+    var i=f.indexOf(document.activeElement);
+    if(e.shiftKey&&i<=0){e.preventDefault();f[f.length-1].focus()}
+    else if(!e.shiftKey&&(i<0||i===f.length-1)){e.preventDefault();f[0].focus()}
+  }
+}
+/* Cerrar (solo avisos opcionales): no vuelve a salir en esta sesión para esa versión */
+function close(){if(!ov||ov.dataset.m==="1")return;try{sessionStorage.setItem(KEY,ov.dataset.v)}catch(e){}drop()}
+function drop(now){
+  var o=ov;ov=null;document.removeEventListener("keydown",onKey,true);
+  inerted.forEach(function(el){el.inert=false});inerted=[];
+  if(now){o.remove();return}
+  o.classList.remove("on");setTimeout(function(){o.remove()},300);
+  try{if(prevFocus&&document.contains(prevFocus))prevFocus.focus({preventScroll:true})}catch(e){}
+}
+
+function check(){
+  if(busy||!window.fetch)return;busy=1;lastCheck=Date.now();
+  load().then(function(info){
+    busy=0;
+    if(!info){failed=1;return}
+    failed=0;
+    if(cmp(info.version,CFG.version)<=0){if(ov)drop();return}
+    var seen="";try{seen=sessionStorage.getItem(KEY)||""}catch(e){}
+    if(!info.mandatory&&seen===info.version)return;
+    show(info);
+  }).catch(function(){busy=0});
+}
+function start(){
+  setTimeout(check,CFG.startDelayMs);
+  document.addEventListener("visibilitychange",function(){if(!document.hidden&&Date.now()-lastCheck>CFG.recheckMs)check()});
+  window.addEventListener("online",function(){if(failed)check()});
+}
+window.LeeyerUpdate={version:CFG.version,check:check};
+if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
+})();
+</script>
+</body></html>
