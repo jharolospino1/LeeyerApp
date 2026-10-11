@@ -6,7 +6,7 @@ on:
       version:
         description: "Versión de la app (ejemplo: 1.0.0)"
         required: true
-        default: "1.0.0"
+        default: "2.1.1"
 
 permissions:
   contents: write
@@ -17,6 +17,7 @@ env:
   VERSION: ${{ inputs.version }}
   KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
   KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+  GS_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
 
 jobs:
   build:
@@ -48,7 +49,7 @@ jobs:
       - name: Instalar Capacitor y dependencias
         run: |
           npm init -y > /dev/null
-          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/local-notifications@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
+          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/local-notifications@7 @capacitor/push-notifications@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
           npm install --save-dev @capacitor/cli@7 @capacitor/assets
 
       - name: Preparar la app (incluir librerías y fuentes dentro del APK)
@@ -179,6 +180,20 @@ jobs:
           MF=android/app/src/main/AndroidManifest.xml
           grep -q "POST_NOTIFICATIONS" "$MF" || sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' "$MF"
           grep -n "uses-permission" "$MF"
+
+      - name: Configurar Firebase (avisos push)
+        run: |
+          if [ -z "$GS_JSON" ]; then
+            echo "::warning::Falta el secreto GOOGLE_SERVICES_JSON: el APK se compila SIN avisos push (Settings > Secrets and variables > Actions)"
+            exit 0
+          fi
+          printf '%s' "$GS_JSON" > android/app/google-services.json
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("android/app/google-services.json", "utf8"));
+            const ok = (j.client || []).some(c => c.client_info && c.client_info.android_client_info && c.client_info.android_client_info.package_name === process.env.APP_ID);
+            if (!ok) { console.error("::error::google-services.json no tiene la app " + process.env.APP_ID + ". En Firebase registra la app Android con ese nombre de paquete."); process.exit(1); }
+            console.log("Firebase OK: proyecto " + j.project_info.project_id);
+          '
 
       - name: Poner versión
         run: |
