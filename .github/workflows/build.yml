@@ -1,47 +1,229 @@
--- LeeyerApp · Notificaciones push (Firebase) — ejecuta TODO en Supabase → SQL Editor → Run
--- (se puede ejecutar varias veces sin problema)
+name: Compilar LeeyerApp (APK)
 
-create table if not exists public.push_tokens (
-  token text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
-  platform text not null default 'android',
-  prefs jsonb not null default '{"m":1,"u":1,"g":1}'::jsonb,   -- m=materiales, u=actualizaciones, g=generales
-  updated_at timestamptz not null default now()
-);
-create index if not exists push_tokens_user_idx on public.push_tokens(user_id);
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión de la app (ejemplo: 1.0.0)"
+        required: true
+        default: "1.0.0"
 
--- Clave de servicio de Firebase: sin políticas = la app nunca puede leerla.
-create table if not exists public.push_secrets (
-  id text primary key default 'main',
-  service_account text,
-  updated_at timestamptz not null default now()
-);
-insert into public.push_secrets(id) values('main') on conflict do nothing;
+permissions:
+  contents: write
 
-alter table public.push_tokens  enable row level security;
-alter table public.push_secrets enable row level security;
-revoke all on public.push_tokens  from anon, authenticated;
-revoke all on public.push_secrets from anon, authenticated;
+env:
+  APP_ID: com.leeyerapp.app
+  APP_NAME: LeeyerApp
+  VERSION: ${{ inputs.version }}
+  KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
+  KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+  GS_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
 
--- La app registra/borra el token del teléfono SOLO mediante estas funciones
-create or replace function public.register_push_token(p_token text, p_prefs jsonb default '{"m":1,"u":1,"g":1}'::jsonb)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  if auth.uid() is null then raise exception 'not authenticated'; end if;
-  if p_token is null or length(p_token) < 20 or length(p_token) > 4096 then raise exception 'invalid token'; end if;
-  insert into public.push_tokens(token, user_id, prefs, updated_at)
-  values (p_token, auth.uid(), coalesce(p_prefs, '{}'::jsonb), now())
-  on conflict (token) do update set user_id = auth.uid(), prefs = coalesce(p_prefs, '{}'::jsonb), updated_at = now();
-end $$;
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
 
-create or replace function public.unregister_push_token(p_token text)
-returns void language plpgsql security definer set search_path = public as $$
-begin
-  if auth.uid() is null then return; end if;
-  delete from public.push_tokens where token = p_token and user_id = auth.uid();
-end $$;
+      - name: Verificar archivos y claves
+        run: |
+          for f in index.html icon-only.png icon-foreground.png; do
+            test -f "$f" || { echo "::error::Falta el archivo $f en el repositorio"; exit 1; }
+          done
+          test -n "$KEYSTORE_B64" || { echo "::error::Falta el secreto KEYSTORE_BASE64 (Settings > Secrets and variables > Actions)"; exit 1; }
+          test -n "$KS_PASS" || { echo "::error::Falta el secreto KEYSTORE_PASSWORD (Settings > Secrets and variables > Actions)"; exit 1; }
+          echo "$VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$' || { echo "::error::La versión debe verse así: 1.0.0"; exit 1; }
 
-revoke all on function public.register_push_token(text, jsonb) from public, anon;
-revoke all on function public.unregister_push_token(text) from public, anon;
-grant execute on function public.register_push_token(text, jsonb) to authenticated;
-grant execute on function public.unregister_push_token(text) to authenticated;
+      - name: Instalar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Instalar Capacitor y dependencias
+        run: |
+          npm init -y > /dev/null
+          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/local-notifications@7 @capacitor/push-notifications@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
+          npm install --save-dev @capacitor/cli@7 @capacitor/assets
+
+      - name: Preparar la app (incluir librerías y fuentes dentro del APK)
+        run: |
+          cat > prepare.mjs <<'EOF'
+          import fs from "fs";
+          fs.rmSync("www", { recursive: true, force: true });
+          fs.mkdirSync("www/fonts", { recursive: true });
+
+          let html = fs.readFileSync("index.html", "utf8");
+
+          // 1) Supabase local en lugar de la CDN
+          fs.copyFileSync("node_modules/@supabase/supabase-js/dist/umd/supabase.js", "www/supabase.js");
+          html = html.replace(/<script[^>]*src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase[^"]*"[^>]*><\/script>/, () => '<script src="supabase.js"></script>');
+
+          // 2) Fuente local en lugar de Google Fonts
+          let css = "";
+          for (const w of [400, 600, 800]) {
+            const name = `plus-jakarta-sans-latin-${w}-normal.woff2`;
+            fs.copyFileSync(`node_modules/@fontsource/plus-jakarta-sans/files/${name}`, `www/fonts/${name}`);
+            css += `@font-face{font-family:"Plus Jakarta Sans";font-style:normal;font-weight:${w};font-display:swap;src:url(fonts/${name}) format("woff2")}`;
+          }
+          html = html.replace(/<link[^>]*fonts\.googleapis\.com[^>]*>/, () => `<style>${css}</style>`);
+
+          // 3) Videos incrustados: enviar referrer (ayuda con YouTube/Vimeo dentro de la app)
+          html = html.split('allowfullscreen></iframe>').join('allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>');
+
+          if (/cdn\.jsdelivr\.net|fonts\.googleapis\.com/.test(html)) {
+            console.error("ERROR: quedaron enlaces externos de CDN/Fuentes en el HTML");
+            process.exit(1);
+          }
+          fs.writeFileSync("www/index.html", html);
+          console.log("OK: www/index.html listo (" + html.length + " bytes)");
+          EOF
+          node prepare.mjs
+
+      - name: Crear el proyecto Android
+        run: |
+          cat > capacitor.config.json <<EOF
+          {
+            "appId": "$APP_ID",
+            "appName": "$APP_NAME",
+            "webDir": "www",
+            "backgroundColor": "#060813",
+            "server": { "androidScheme": "https" },
+            "android": { "adjustMarginsForEdgeToEdge": "force" },
+            "plugins": { "LocalNotifications": { "smallIcon": "ic_stat_leeyer", "iconColor": "#6D4AF5" } }
+          }
+          EOF
+          npx cap add android
+          npx cap sync android
+
+      - name: Generar íconos
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          cp icon-only.png icon-foreground.png assets/
+          npx capacitor-assets generate --android --iconBackgroundColor '#010219' --iconBackgroundColorDark '#010219'
+
+      - name: Asegurar fondo del ícono
+        run: |
+          cat > fixicon.mjs <<'EOF'
+          import fs from "fs";
+          import zlib from "zlib";
+
+          // PNG de un solo color, sin librerías externas
+          function solidPng(size, [r, g, b]) {
+            const stride = size * 3 + 1;
+            const raw = Buffer.alloc(size * stride);
+            for (let y = 0; y < size; y++) {
+              const o = y * stride;
+              raw[o] = 0;
+              for (let x = 0; x < size; x++) {
+                raw[o + 1 + x * 3] = r;
+                raw[o + 2 + x * 3] = g;
+                raw[o + 3 + x * 3] = b;
+              }
+            }
+            const chunk = (type, data) => {
+              const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+              const td = Buffer.concat([Buffer.from(type), data]);
+              const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td) >>> 0);
+              return Buffer.concat([len, td, crc]);
+            };
+            const ihdr = Buffer.alloc(13);
+            ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+            ihdr[8] = 8; ihdr[9] = 2;
+            return Buffer.concat([
+              Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+              chunk("IHDR", ihdr),
+              chunk("IDAT", zlib.deflateSync(raw)),
+              chunk("IEND", Buffer.alloc(0)),
+            ]);
+          }
+
+          const res = "android/app/src/main/res";
+          const sizes = { mdpi: 108, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 };
+          let created = 0;
+          for (const [d, s] of Object.entries(sizes)) {
+            const dir = `${res}/mipmap-${d}`;
+            fs.mkdirSync(dir, { recursive: true });
+            const has = fs.readdirSync(dir).some((f) => f.startsWith("ic_launcher_background."));
+            if (!has) {
+              fs.writeFileSync(`${dir}/ic_launcher_background.png`, solidPng(s, [1, 2, 25]));
+              created++;
+            }
+          }
+          console.log("Fondos de ícono creados: " + created);
+
+          // Mostrar qué recursos de ícono quedaron, para diagnóstico
+          for (const f of fs.readdirSync(res).filter((n) => n.startsWith("mipmap-")).sort()) {
+            console.log(f + ": " + fs.readdirSync(`${res}/${f}`).join(", "));
+          }
+          EOF
+          node fixicon.mjs
+
+      - name: Preparar notificaciones (ícono y permiso)
+        run: |
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_leeyer.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFFFF"
+                android:pathData="M12,22c1.1,0 2,-0.9 2,-2h-4c0,1.1 0.89,2 2,2zM18,16v-5c0,-3.07 -1.64,-5.64 -4.5,-6.32V4c0,-0.83 -0.67,-1.5 -1.5,-1.5s-1.5,0.67 -1.5,1.5v0.68C7.63,5.36 6,7.92 6,11v5l-2,2v1h16v-1l-2,-2z"/>
+          </vector>
+          EOF
+          MF=android/app/src/main/AndroidManifest.xml
+          grep -q "POST_NOTIFICATIONS" "$MF" || sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' "$MF"
+          grep -n "uses-permission" "$MF"
+
+      - name: Configurar Firebase (avisos push)
+        run: |
+          if [ -z "$GS_JSON" ]; then
+            echo "::warning::Falta el secreto GOOGLE_SERVICES_JSON: el APK se compila SIN avisos push (Settings > Secrets and variables > Actions)"
+            exit 0
+          fi
+          printf '%s' "$GS_JSON" > android/app/google-services.json
+          node -e '
+            const j = JSON.parse(require("fs").readFileSync("android/app/google-services.json", "utf8"));
+            const ok = (j.client || []).some(c => c.client_info && c.client_info.android_client_info && c.client_info.android_client_info.package_name === process.env.APP_ID);
+            if (!ok) { console.error("::error::google-services.json no tiene la app " + process.env.APP_ID + ". En Firebase registra la app Android con ese nombre de paquete."); process.exit(1); }
+            console.log("Firebase OK: proyecto " + j.project_info.project_id);
+          '
+
+      - name: Poner versión
+        run: |
+          sed -i -E "s/versionCode[[:space:]]*=?[[:space:]]*[0-9]+/versionCode ${{ github.run_number }}/; s/versionName[[:space:]]*=?[[:space:]]*\"[^\"]*\"/versionName \"$VERSION\"/" android/app/build.gradle
+          grep -nE "versionCode|versionName" android/app/build.gradle
+
+      - name: Compilar APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Alinear y firmar el APK
+        run: |
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          UNSIGNED=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK sin firmar: $UNSIGNED"
+          echo "$KEYSTORE_B64" | base64 -d > release.jks
+          "$BT/zipalign" -p -f 4 "$UNSIGNED" aligned.apk
+          "$BT/apksigner" sign --ks release.jks --ks-key-alias leeyerapp --ks-pass env:KS_PASS --key-pass env:KS_PASS --out LeeyerApp.apk aligned.apk
+          "$BT/apksigner" verify --print-certs LeeyerApp.apk
+          ls -la LeeyerApp.apk
+          rm -f release.jks
+
+      - name: Publicar en Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v${VERSION}-b${{ github.run_number }}"
+          gh release create "$TAG" LeeyerApp.apk \
+            --title "LeeyerApp $VERSION" \
+            --notes "APK de LeeyerApp versión $VERSION para Android." \
+            --latest
+          echo "Enlace fijo de descarga: https://github.com/${{ github.repository }}/releases/latest/download/LeeyerApp.apk"
+          
