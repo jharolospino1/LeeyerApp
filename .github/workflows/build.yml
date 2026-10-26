@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versión de la app (ejemplo: 3.1.2)"
+        description: "Versión de la app (ejemplo: 1.0.0)"
         required: true
-        default: "3.1.2"
+        default: "1.0.0"
 
 permissions:
   contents: write
@@ -49,7 +49,7 @@ jobs:
       - name: Instalar Capacitor y dependencias
         run: |
           npm init -y > /dev/null
-          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/local-notifications@7 @capacitor/push-notifications@7 @capgo/capacitor-native-biometric@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
+          npm install @capacitor/core@7 @capacitor/android@7 @capacitor/app@7 @capacitor/local-notifications@7 @capacitor/push-notifications@7 @capgo/capacitor-native-biometric@7 @fontsource/plus-jakarta-sans @supabase/supabase-js@2.45.4
           npm install --save-dev @capacitor/cli@7 @capacitor/assets
 
       - name: Preparar la app (incluir librerías y fuentes dentro del APK)
